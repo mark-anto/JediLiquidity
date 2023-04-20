@@ -209,13 +209,15 @@ mod jedi_withdraw_liquidity {
         let sender = get_caller_address();
         let (amount0,amount1) = _remove_liquidity(from_pair_address,incoming_lp);
 
-        //Line 321 and 331
+        let check = min_tokens_rec - tokens_rec;
+        assert(check > 0_u128 == 1,'High slippage');
 
-        IERC20Dispatcher{to_token_address}.transfer(sender,tokens_rec_after_fees);
 
-        Zapped_out(sender,from_pair_address,to_token_address,tokens_rec_after_fees);
+        IERC20Dispatcher{to_token_address}.transfer(sender,tokens_rec);
 
-        return tokens_rec_after_fees;
+        Zapped_out(sender,from_pair_address,to_token_address,tokens_rec);
+
+        return tokens_rec;
     }
 
     #[external]
@@ -223,7 +225,6 @@ mod jedi_withdraw_liquidity {
         if(tokens.len() == 0_u32){
             return ();
         }
-
 
         let contract_address = get_contract_address();
         let ierc20_address =  *tokens.at(0);
