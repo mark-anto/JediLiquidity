@@ -146,15 +146,192 @@ trait IFactory {
 #[abi]
 trait IRouter {
     // fn factory() -> ContractAddress;
-    fn remove_liquidity(
-        a_address: ContractAddress,
-        a_amount: u128,
-        a_min_amount: u128,
-        b_address: ContractAddress,
-        b_amount: u128,
-        b_min_amount: u128,
-    ) -> (u128, u128);
+    fn withdraw_liquidity(
+        pool_id:u128,
+        shares_amount: u128,
+        amount_min_a: u128,
+        amount_min_b: u128,
+    ) -> (u128, u128,u128,u128);
     fn swap(
         pool_id: u128, token_from_addr: ContractAddress, amount_from: u128, amount_to_min: u128
     ) -> u128;
 }
+#[contract]
+mod jedi_withdraw_liquidity {
+    use starknet::ContractAddress;
+    use array::ArrayTrait;
+    use array::SpanTrait;
+    use zeroable::Zeroable;
+    use starknet::ContractAddressZeroable;
+    use starknet::get_caller_address;
+    use starknet::get_contract_address;
+    use starknet::contract_address_const;
+
+
+    use super::IPair;
+    use super::IPairDispatcherTrait;
+    use super::IPairDispatcher;
+
+    use super::IERC20;
+    use super::IERC20DispatcherTrait;
+    use super::IERC20Dispatcher;
+
+    use super::IRouter;
+    use super::IRouterDispatcherTrait;
+    use super::IRouterDispatcher;
+
+    use super::IFactory;
+    use super::IFactoryDispatcherTrait;
+    use super::IFactoryDispatcher;
+    use super::MySwapPool;
+
+    struct Storage {
+        _factory: ContractAddress,
+        _router: ContractAddress,
+        _deadline: u64,
+        my_swap_poolinfo: LegacyMap::<(ContractAddress, ContractAddress), u128>,
+        pool_asset: LegacyMap::<u128, MySwapPool>,
+        _mySwap_router: ContractAddress,
+    }
+
+     #[event]
+    fn Zapped_out(sender:ContractAddress,pool_id:u128,to_token:ContractAddress,tokens_rec:u128){}
+
+    #[external]
+    fn zap_out(to_token_address: ContractAddress,
+    from_pair_address: ContractAddress,
+    incoming_lp: Uint256,
+    min_tokens_rec: Uint256,
+    path0: Array::<ContractAddress>,
+    path1: Array::<ContractAddress>) -> u128 {
+        assert(!from_pair_address.is_zero(), 'zero address');
+        assert(!to_token_address.is_zero(), 'from zero address');
+        let sender = get_caller_address();
+        let (amount0,amount1) = _remove_liquidity(from_pair_address,incoming_lp);
+
+        //Line 321 and 331
+
+        IERC20Dispatcher{to_token_address}.transfer(sender,tokens_rec_after_fees);
+
+        Zapped_out(sender,from_pair_address,to_token_address,tokens_rec_after_fees);
+
+        return tokens_rec_after_fees;
+    }
+
+    #[external]
+    fn withdraw_tokens(tokens:Array::<ContractAddress>){
+        if(tokens.len() == 0_u32){
+            return ();
+        }
+
+
+        let contract_address = get_contract_address();
+        let ierc20_address =  *tokens.at(0);
+        let amount = IERC20Dispatcher{contract_address:ierc20_address}.balance_of(contract_address);
+        // IERC20Dispatcher{ierc20_address}.transfer(owner,amount);
+        // return withdraw_tokens
+    }
+
+
+    fn _remove_liquidity(pool_id:u128,from_pair_address:ContractAddress ,incoming_lp: u128) -> (u128,u128){
+        let (token0,token1) = get_pair_address();
+        let router = _mySwap_router::read();
+        let contract_address = get_contract_address();
+        let sender = get_caller_address();
+        IERC20Dispatcher{from_pair_address}.transferFrom(sender,contract_address,incoming_lp);
+        IERC20Dispatcher{from_pair_address}.approve(router,0_u128);
+        IERC20Dispatcher{from_pair_address}.approve(router,incoming_lp);
+
+        let (amount0,amount1) = IRouterDispatcher{contract_address:router}.withdraw_liquidity{
+            pool_id:pool_id,shares_amount:incoming_lp,amount_min_a:1_u128,amount_min_b:1_u128    
+            };
+            assert(amount0 == 0_u128,'Remove liquidity');
+            assert(amount1 == 0_u128,'Remove liquidity');
+            
+            return (amount0,amount1);
+
+    }
+
+    fn _swap_tokens(pool_id: u128,from_pair_address:ContractAddress,amount0:u128, amount1:u128, to_token:ContractAddress,path0: Array::<ContractAddress>,path1: Array::<ContractAddress>) -> u128 {
+        let (token0,token1) = get_pair_address();
+        if(token0 == to_token){
+            let tokens_bought0 = amount0;
+        } else {
+            let amount_rec = _fill_quote(token0,to_token,amount0,path0);
+        }
+
+        if(token1==to_token){
+            let tokens_bought1 = amount1;
+        } else {
+            let amount_rec = _fill_quote(token1,to_token,amount1,path1);
+        }
+
+        let tokens_bought = tokens_bought0 + tokens_bought1;
+        return tokens_bought;
+    }
+
+    fn _fill_quote(
+        pool_id: u128,
+        token_from_addr: ContractAddress,
+        amount_from: u128,
+        amount_to_min: u128,
+        amount: u128,
+    ) -> (u128, ContractAddress) {
+        let (token0, token1) = get_pair_address(pool_id);
+        let contract_address = get_contract_address();
+
+        let initial_balance0: u128 = IERC20Dispatcher {
+            contract_address: token0
+        }.balance_of(contract_address);
+        let initial_balance1: u128 = IERC20Dispatcher {
+            contract_address: token1
+        }.balance_of(contract_address);
+
+        let router = _router::read();
+        let deadline = _deadline::read();
+
+        IERC20Dispatcher { contract_address: token_from_addr }.approve(router, amount);
+
+        let amounts = IRouterDispatcher {
+            contract_address: router
+        }.swap(pool_id, token_from_addr, amount_from, amount_to_min, deadline);
+
+        let token_bought: u128 = *amounts[1_u32];
+        assert(token_bought > 0, 'token bought less than 0');
+
+        let contract_token0_balance: u128 = IERC20Dispatcher {
+            contract_address: token0
+        }.balance_of(contract_address);
+
+        let final_balance0: u128 = contract_token0_balance - initial_balance0;
+
+        let contract_token1_balance: u128 = IERC20Dispatcher {
+            contract_address: token1
+        }.balance_of(contract_address);
+
+        let final_balance1: u128 = contract_token1_balance - initial_balance1;
+
+        let (amount_bought, intermediate_token) = if final_balance1 < final_balance0 {
+            (final_balance0, token0)
+        } else {
+            (final_balance1, token1)
+        };
+
+        assert(amount_bought != 0_u128, 'Amount 0, revert');
+
+        (amount_bought, intermediate_token)
+    }
+
+
+
+    fn get_pair_address(pool_id: u128) -> (ContractAddress, ContractAddress) {
+        let pool: MySwapPool = pool_asset.read(pool_id);
+        let token0 = pool.token_a_address;
+        let token1 = pool.token_b_address;
+        return (token0, token1);
+    }
+}
+
+
+
+
