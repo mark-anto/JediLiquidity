@@ -1,7 +1,7 @@
 use zeroable::Zeroable;
 use starknet::get_caller_address;
-use starknet::contract_address_const;
 use starknet::ContractAddress;
+use starknet::contract_address_const;
 use starknet::ContractAddressZeroable;
 use starknet::StorageAccess;
 use starknet::StorageBaseAddress;
@@ -12,6 +12,7 @@ use starknet::storage_address_from_base_and_offset;
 use traits::Into;
 use traits::TryInto;
 use option::OptionTrait;
+use array::ArrayTrait;
 use starknet::contract_address;
 #[derive(Copy, Drop)]
 struct MySwapPool {
@@ -137,9 +138,9 @@ trait IERC20 {
 
 #[abi]
 trait IFactory {
-    // fn get_pair(token0: ContractAddress, token1: ContractAddress) -> ContractAddress;
-    // fn get_pool(pool_id: u128) -> MySwapPool;
-    fn _myswap_pool_id(token0: ContractAddress, token1: ContractAddress) -> u128;
+    fn get_pair(token0: ContractAddress, token1: ContractAddress) -> ContractAddress;
+    fn get_pool(pool_id: u128) -> MySwapPool;
+    fn _myswap_pool_id(token0: ContractAddress, token1: ContractAddress) -> ContractAddress;
 }
 
 
@@ -153,7 +154,7 @@ trait IRouter {
         b_address: ContractAddress,
         b_amount: u128,
         b_min_amount: u128,
-    ) -> (u128, u128); //actual1 and actual2
+    ) -> (u128, u128,u128); //actual1 and actual2
     // fn swap_exact_tokens_for_tokens(
     //     amountIn: u128,
     //     amountOutMin: u128,
@@ -163,7 +164,7 @@ trait IRouter {
     // ) -> Array::<u128>;
     fn swap(
         pool_id: u128, token_from_addr: ContractAddress, amount_from: u128, amount_to_min: u128
-    ) -> u128;
+    ) -> Array::<u128>;
 }
 
 #[contract]
@@ -176,11 +177,6 @@ mod jedi_liquidity {
     use starknet::get_caller_address;
     use starknet::get_contract_address;
     use starknet::contract_address_const;
-
-
-    use super::IPair;
-    use super::IPairDispatcherTrait;
-    use super::IPairDispatcher;
 
     use super::IERC20;
     use super::IERC20DispatcherTrait;
@@ -243,11 +239,17 @@ mod jedi_liquidity {
 
         let lp_bought: u128 = _perform_zap_in(from_token_address, pool_id, amount,0_u128,amount_from);
 
+        let (token0,token1) = get_pair_address(pool_id);
+
         assert(lp_bought >= min_pool_token, 'less than minimum');
+        let factory: ContractAddress = _factory::read();
+        let pair_address: ContractAddress = IFactoryDispatcher {
+            contract_address: factory
+        }._myswap_pool_id(token0, token1);
 
         IERC20Dispatcher { contract_address: pair_address }.transfer(sender, lp_bought);
 
-        zapped_in(sender, from_token_address, pair_address, lp_bought, );
+        // zapped_in(sender, from_token_address, pair_address, lp_bought );
 
         lp_bought
     }
@@ -256,14 +258,14 @@ mod jedi_liquidity {
     // perform zap_in functionality. Consider changing names, right now just copied off Jedi
     fn _perform_zap_in(
         from_token_address: ContractAddress,
-        pair_id: u128,
+        pool_id: u128,
         amount: u128,
         amount_to_min: u128,
         amount_from: u128,
-    ) -> (u128, u128) {
+    ) -> u128 {
         let mut intermediate_amt: u128 = 0_u128;
         let mut intermediate_token: ContractAddress = contract_address_const::<0>();
-        let (token0, token1) = get_pair_address(pair_id);
+        let (token0, token1) = get_pair_address(pool_id);
 
         if (from_token_address == token0) {
             intermediate_amt = amount;
@@ -282,7 +284,7 @@ mod jedi_liquidity {
         }
 
         let (token0_bought, token1_bought) = _swap_intermediate(
-            intermediate_token, token0, token1, intermediate_amt
+            intermediate_token, token0, token1, intermediate_amt,pool_id
         );
         _jedi_deposit(token0, token1, token0_bought, token1_bought)
     }
@@ -298,7 +300,7 @@ mod jedi_liquidity {
 
         // let contract_address = get_contract_address();
         let deadline: u64 = _deadline::read();
-        let (amountA, amountB) = IRouterDispatcher {
+        let (amountA, amountB,liquidity) = IRouterDispatcher {
             contract_address: router
         }.add_liquidity(token0, token0_bought, 1_u128, token1, token1_bought, 1_u128, );
 
@@ -309,13 +311,14 @@ mod jedi_liquidity {
         if (amountB < token1_bought) { //Swap residual amount here to loan_amt as well
         }
 
-        return (amountA, amountB);
+        return liquidity;
     }
 
     // get pair token addresses
-    fn _get_pair_tokens(pool_id: ContractAddress) -> (ContractAddress, ContractAddress) {
-        let token0 = IPairDispatcher { contract_address: pair_address }.token0();
-        let token1 = IPairDispatcher { contract_address: pair_address }.token1();
+    fn _get_pair_tokens(pool_id: u128) -> (ContractAddress, ContractAddress) {
+        let (token0, token1) = get_pair_address(pool_id);
+        // let token0 = IPairDispatcher { contract_address: pair_address }.token0();
+        // let token1 = IPairDispatcher { contract_address: pair_address }.token1();
 
         (token0, token1)
     }
@@ -346,7 +349,7 @@ mod jedi_liquidity {
 
         let amounts = IRouterDispatcher {
             contract_address: router
-        }.swap(pool_id, token_from_addr, amount_from, amount_to_min, deadline);
+        }.swap(pool_id, token_from_addr, amount_from, amount_to_min);
 
         let token_bought: u128 = *amounts[1_u32];
         assert(token_bought > 0, 'token bought less than 0');
@@ -388,7 +391,7 @@ mod jedi_liquidity {
             contract_address: factory
         }._myswap_pool_id(token0, token1);
 
-        let (res0, res1) = get_pair_reserves();
+        let (res0, res1) = get_pair_reserves(pool_id);
         let mut token1_bought = 0_u128;
         let mut token0_bought = 0_u128;
         let mut amount_to_swap = 0_u128;
@@ -432,7 +435,7 @@ mod jedi_liquidity {
             let router: ContractAddress = _router::read();
             IERC20Dispatcher { contract_address: from_token }.approve(router, token_to_trade);
 
-            let pool_id = IFactoryDispatcher {
+            let pair_address = IFactoryDispatcher {
                 contract_address: factory
             }._myswap_pool_id(from_token, to_token);
             assert(!pool_id.is_zero(), 'pool id is 0');
@@ -444,7 +447,8 @@ mod jedi_liquidity {
             let contract_address = get_contract_address();
             let amounts = IRouterDispatcher {
                 contract_address: router
-            }.swap(pool_id, from_token, to_token, 0_u128);
+            }.swap(pool_id, pair_address,token_to_trade, 0_u128);
+            // pool_id: u128, token_from_addr: ContractAddress, amount_from: u128, amount_to_min: u128
 
             let token_bought: u128 = *amounts[1_u32];
             assert(token_bought > 0_u128, 'Token bought less than 0');
@@ -470,16 +474,27 @@ mod jedi_liquidity {
     }
 
     fn get_pair_address(pool_id: u128) -> (ContractAddress, ContractAddress) {
-        let pool: MySwapPool = pool_asset.read(pool_id);
+        let pool: MySwapPool = pool_asset::read(pool_id);
         let token0 = pool.token_a_address;
         let token1 = pool.token_b_address;
         return (token0, token1);
     }
 
     fn get_pair_reserves(pool_id: u128) -> (u128, u128) {
-        let pool: MySwapPool = pool_asset.read(pool_id);
+        let pool: MySwapPool = pool_asset::read(pool_id);
         let res1 = pool.token_a_reserves;
         let res2 = pool.token_b_reserves;
+        return (res1,res2);
     }
+
 }
+
+
+
+
+
+
+
+
+
 
