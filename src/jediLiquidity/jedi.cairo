@@ -87,7 +87,7 @@ mod jedi_liquidity {
     }
 
     #[event]
-    fn zapped_in(
+    fn add_liquidity_event(
         sender: ContractAddress,
         from_token: ContractAddress,
         pool_address: ContractAddress,
@@ -97,7 +97,7 @@ mod jedi_liquidity {
 
     // External point of interaction
     #[external]
-    fn zap_in(
+    fn add_liquidity(
         from_token_address: ContractAddress,
         pair_address: ContractAddress,
         amount: u128,
@@ -115,20 +115,22 @@ mod jedi_liquidity {
             contract_address: from_token_address
         }.transfer_from(sender, contract_address, amount);
 
-        let lp_bought: u128 = _perform_zap_in(from_token_address, pair_address, amount, path);
+        let lp_bought: u128 = _perform_add_liquidity(
+            from_token_address, pair_address, amount, path
+        );
 
         assert(lp_bought >= min_pool_token, 'less than minimum');
 
         IERC20Dispatcher { contract_address: pair_address }.transfer(sender, lp_bought);
 
-        zapped_in(sender, from_token_address, pair_address, lp_bought, );
+        add_liquidity_event(sender, from_token_address, pair_address, lp_bought);
 
         lp_bought
     }
 
 
-    // perform zap_in functionality. Consider changing names, right now just copied off Jedi
-    fn _perform_zap_in(
+    // perform add_liquidity functionality. 
+    fn _perform_add_liquidity(
         from_token_address: ContractAddress,
         pair_address: ContractAddress,
         amount: u128,
@@ -351,5 +353,19 @@ mod jedi_liquidity {
 
         amount_to_swap
     }
+// 1000 -> A + B
+// // get_amount_out(x) = quote(1000 - x)
+// amountIn * 997 / ((reserveIn * 1000) + amountIn * 997) = ((loan_amt - amountIn)) / reserveIn;
+// amountIn * 997 * reserveIn = 
+
+// 997*x**2 + 1997*x + 1000 = 0
+
+// b = 1997 * reserve_in - 997 * 1000
+// a = 997
+// c = - 1000 * 1000 * reserve_in
+
+// expand b according to (a + b)**2
+
+// b**2 - 4ac
 }
 

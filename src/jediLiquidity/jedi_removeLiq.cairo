@@ -24,17 +24,15 @@ trait IFactory {
 #[abi]
 trait IRouter {
     fn factory() -> ContractAddress;
-
     fn remove_liquidity(
         tokenA: ContractAddress,
         tokenB: ContractAddress,
-        liquidity:u128,
+        liquidity: u128,
         amountAMin: u128,
         amountBMin: u128,
         to: ContractAddress,
         deadline: u64,
     ) -> (u128, u128);
-
     fn swap_exact_tokens_for_tokens(
         amountIn: u128,
         amountOutMin: u128,
@@ -89,55 +87,125 @@ mod jedi_removeLiquidity {
     }
 
     #[event]
-    fn zapped_out(
+    fn remove_liquidity_event(
         sender: ContractAddress,
         pool_address: ContractAddress,
         to_token: ContractAddress,
         tokens_rec: u128,
     ) {}
 
-#[external]
-fn zap_out(
-    to_token_address: ContractAddress,
-    from_pair_address: ContractAddress,
-    incoming_lp: u128,
-    min_tokens_rec: u128,
-    path0: Array::<ContractAddress>,
-    path1: Array::<ContractAddress>,
-) -> u128 {
-    assert(!from_pair_address.is_zero(), 'zero address');
-    assert(!to_token_address.is_zero(), 'from zero address');
-    let sender = get_caller_address();
+    #[external]
+    fn remove_liquidity(
+        to_token_address: ContractAddress,
+        from_pair_address: ContractAddress,
+        incoming_lp: u128,
+        min_tokens_rec: u128,
+        path0: Array::<ContractAddress>,
+        path1: Array::<ContractAddress>,
+    ) -> u128 {
+        assert(!from_pair_address.is_zero(), 'zero address');
+        assert(!to_token_address.is_zero(), 'from zero address');
+        let sender = get_caller_address();
 
-    let (amount0, amount1) = _remove_liquidity(from_pair_address, incoming_lp);
+        let (amount0, amount1) = _remove_liquidity(from_pair_address, incoming_lp);
 
-    let tokens_rec = _swap_tokens(
-        from_pair_address, amount0, amount1, to_token_address,path0,path1
-    );
+        let tokens_rec = _swap_tokens(
+            from_pair_address, amount0, amount1, to_token_address, path0, path1
+        );
+        assert(tokens_rec >= min_tokens_rec, 'High');
 
-    if(tokens_rec >= min_tokens_rec){
+        IERC20Dispatcher { contract_address: to_token_address }.transfer(sender, tokens_rec);
+        remove_liquidity_event(sender, from_pair_address, to_token_address, tokens_rec);
 
+        tokens_rec
     }
 
-    let (is_tokens_rec_less_than_min_tokens_rec) = uint256_lt(tokens_rec, min_tokens_rec);
-    with_attr error_message('ZapperOut::zap_out:: High Slippage') {
-        assert is_tokens_rec_less_than_min_tokens_rec = 0;
+    fn _remove_liquidity(from_pair_address: ContractAddress, incoming_lp: u128) -> (u128, u128) {
+        let (token0, token1) = _get_pair_tokens(from_pair_address);
+        let router = _router::read();
+        let contract_address = get_contract_address();
+        let sender = get_caller_address();
+        let deadline = _deadline::read();
+
+        let erc20 = IERC20Dispatcher { contract_address: from_pair_address };
+
+        erc20.transfer_from(sender, contract_address, incoming_lp);
+        erc20.approve(router, 0_u128);
+        erc20.approve(router, incoming_lp);
+
+        let (amount0, amount1) = IRouterDispatcher {
+            contract_address: router
+        }.remove_liquidity(
+            token0, token1, incoming_lp, 1_u128, 1_u128, contract_address, deadline, 
+        );
+
+        assert(amount0 != 0_u128, 'token0 insufficient');
+        assert(amount1 != 0_u128, 'token1 insufficient');
+        (amount0, amount1)
     }
 
- 
-    let tokens_rec_after_fees: u128 = uint256_checked_sub_lt(tokens_rec, goodwill_portion);
+    fn _swap_tokens(
+        from_pair_address: ContractAddress,
+        amount0: u128,
+        amount1: u128,
+        to_token: ContractAddress,
+        path0: Array::<ContractAddress>,
+        path1: Array::<ContractAddress>,
+    ) -> u128 {
+        let (token0, token1) = _get_pair_tokens(from_pair_address);
+        let mut tokens_bought0 = 0_u128;
+        let mut tokens_bought1 = 0_u128;
 
-    IERC20.transfer(
-        contract_address=to_token_address, recipient=sender, amount=tokens_rec_after_fees
-    );
+        tokens_bought0 =
+            if token0 == to_token {
+                amount0
+            } else {
+                _fill_quote(token0, to_token, amount0, path0)
+            };
 
-    Zapped_out.emit(
-        sender=sender,
-        pool_address=from_pair_address,
-        to_token=to_token_address,
-        tokens_rec=tokens_rec_after_fees,
-    );
-    return (tokens_rec_after_fees,);
-}
+        tokens_bought1 =
+            if token1 == to_token {
+                amount1
+            } else {
+                _fill_quote(token1, to_token, amount1, path1)
+            };
 
+        tokens_bought0 + tokens_bought1
+    }
+
+    fn _get_pair_tokens(pair_address: ContractAddress) -> (ContractAddress, ContractAddress) {
+        let token0 = IPairDispatcher { contract_address: pair_address }.token0();
+        let token1 = IPairDispatcher { contract_address: pair_address }.token1();
+
+        (token0, token1)
+    }
+
+    fn _fill_quote(
+        from_token_address: ContractAddress,
+        to_token_address: ContractAddress,
+        amount: u128,
+        path: Array::<ContractAddress>
+    ) -> u128 {
+        let contract_address = get_contract_address();
+        let ierc20 = IERC20Dispatcher { contract_address: to_token_address };
+
+        let initial_balance = ierc20.balance_of(contract_address);
+
+        let router = _router::read();
+        let deadline = _deadline::read();
+
+        IERC20Dispatcher { contract_address: from_token_address }.approve(router, amount);
+        let amounts = IRouterDispatcher {
+            contract_address: router
+        }.swap_exact_tokens_for_tokens(amount, 0_u128, path, contract_address, deadline, );
+
+        let token_bought: u128 = *amounts[amounts.len() - 2];
+        assert(token_bought > 0_u128, 'Tokens bought less than 0');
+
+        let new_balance = ierc20.balance_of(contract_address);
+        let final_balance = new_balance - initial_balance;
+        assert(final_balance == 0_u128, 'Final balance should be 0');
+
+        final_balance
+    }
 }
