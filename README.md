@@ -11,7 +11,7 @@ The equation intuitively resolves to the following:
 
 Here x is the amount added as market A and (1000 - x) is the amount added as market B. The value of the split should be roughly same as ratio of
 A:B so as to not cause any swings.
-Equation [1] can be exapnded using AMM formulae to further simplify this equation to a quadratic to be solved for x by solving quadratic roots
+Equation [1] can be expanded using AMM formulae to further simplify this equation to a quadratic to be solved for x by solving quadratic roots
 using the determinant.
 
 # Example Use Case
@@ -29,3 +29,4 @@ The equation is structured assuming 3% fees [standard for most AMM's]. To note h
 Check out mesh finances Zapper contracts for the inspiration/reference of this project
 https://github.com/mesh-finance/zapper-starknet/tree/initial_poc
 
+# Outdated as of 2024 as Cairo versions have had major changes. The core logic is sound and tested but code cannot and should not be used as is.
